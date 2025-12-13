@@ -1,3 +1,5 @@
+import jwt
+import datetime
 from flask import Flask, jsonify, request
 from flask_mysqldb import MySQL
 from flask_cors import CORS
@@ -5,7 +7,10 @@ from flask_cors import CORS
 from config import config
 
 app = Flask(__name__)
-CORS(app, resources={r"/propiedades/*": {"origins": "http://localhost:4200"}})
+# CORS(app, resources={r"/propiedades/*": {"origins": "http://localhost:4200"}})
+CORS(app) 
+# Clave secreta para firmar el JWT 
+SECRET_KEY = 'P455word'
 
 conexion = MySQL(app)
 
@@ -240,16 +245,29 @@ def agendar_cita():
     try:
         datos = request.json
         cursor = conexion.connection.cursor()
+
+        cursor.execute("SELECT MAX(id_cita) FROM citas")
+        ultimo_id = cursor.fetchone()[0]  # devuelve tupla (MAX(id_usuario),)
+        if ultimo_id is None:
+            nuevo_id = 1  # si la tabla está vacía
+        else:
+            nuevo_id = ultimo_id + 1
+
+
         
-        sql = """INSERT INTO citas (id_usuario, id_propiedad, fecha, hora, estado, notas)
-                 VALUES (%s, %s, %s, %s, 'pendiente', %s)"""
+        sql = """INSERT INTO citas (id_cita, id_usuario, id_propiedad, nombreCliente, email, telefono, notas, fecha, hora, estado)
+                 VALUES (%s,%s, %s, %s, %s, %s, %s, %s, %s, 'pendiente')"""
         
-        valores = (
+        valores = (nuevo_id,
             datos.get('id_usuario', 1),  # Temporal, después del login
-            datos['propiedad_id'],
+            datos['id_propiedad'],
+            datos['nombreCliente'],
+            datos['email'],
+            datos['telefono'],
+            datos['notas'],
             datos['fecha'],
             datos['hora'],
-            datos.get('notas', '')
+            # datos.get('notas', '')
         )
         
         cursor.execute(sql, valores)
@@ -258,7 +276,25 @@ def agendar_cita():
         return jsonify({'mensaje': 'Cita agendada', 'id': cursor.lastrowid, 'exito': True})
         
     except Exception as ex:
+        print(ex) 
         return jsonify({'mensaje': 'error', 'exito': False})
+##################################################
+
+@app.route('/citas', methods=['GET'])
+def listar_citas():
+    try:
+        cursor = conexion.connection.cursor()
+        cursor.execute("SELECT * FROM citas")
+        citas = cursor.fetchall()  
+
+        lista = []
+        for c in citas:
+            lista.append({'id_cita': c[0], 'id_usuario': c[1], 'id_propiedad': c[2], 'nombreCliente': c[3], 'email': c[4], 'telefono': c[5], 'notas': c[6] , 'fecha': str(c[7]) , 'hora': str(c[8] ), 'estado': c[9] })
+        return jsonify(lista)
+    except Exception as ex:
+        print(ex)
+        return jsonify({'mensaje': 'error', 'exito': False})
+
 
 
 ################################################
@@ -319,8 +355,129 @@ def dashboard_usuario(usuario_id):
 
 
 
+# Endpoint de login
+# @app.route('/login', methods=['POST'])
+# def login():
+#     data = request.get_json()
+#     email = data.get('email')
+#     password = data.get('password')
+
+#     usuario = Usuario.query.filter_by(email=email).first()
+#     if not usuario or not usuario.check_password(password):
+#         return jsonify({'message': 'Email o contraseña incorrecta'}), 401
+
+#     return jsonify({'message': f'Bienvenido {usuario.email}'})
 
 
+
+# ---------------------------
+# Login usuario
+# ---------------------------
+@app.route('/login', methods=['POST'])
+def login():
+    try:
+        datos = request.json
+        cursor = conexion.connection.cursor()
+        
+        sql = "SELECT * FROM usuarios WHERE nombre = %s and contrasena = %s"
+        
+        valores = (datos['nombre'], datos['contrasena'])
+        
+        cursor.execute(sql, valores)
+        usuario = cursor.fetchone()  # devuelve un registro o None
+
+        if usuario:
+            # # Datos que quiero incluir en el JWT (por ejemplo, el ID del usuario)
+            # payload = {
+            #     'id': usuario[0],  # El primer valor de la tupla es el ID del usuario 
+            #     'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)  # el token expira en 1 hora
+            # }
+
+            # # Genero el token JWT
+            # token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+            # print(token)
+            return jsonify({
+                'mensaje': 'Usuario válido',
+                'id': usuario[0], 
+                # 'token': token,  # Devuelvo el token al cliente
+                'exito': True
+            })
+        else:
+            return jsonify({'mensaje': 'Usuario o contraseña incorrecta', 'exito': False})
+
+    except Exception as ex:
+        print(ex)  # para ver el error real
+        return jsonify({'mensaje': 'error', 'exito': False})
+
+
+
+@app.route('/registrar', methods=['POST'])
+def registrar():
+    try:
+        datos = request.json
+        cursor = conexion.connection.cursor()
+
+        # Obtener el último ID de la tabla
+        cursor.execute("SELECT MAX(id_usuario) FROM usuarios")
+        ultimo_id = cursor.fetchone()[0]  # devuelve tupla (MAX(id_usuario),)
+        if ultimo_id is None:
+            nuevo_id = 1  # si la tabla está vacía
+        else:
+            nuevo_id = ultimo_id + 1
+
+        # Insertar nuevo usuario con ID consecutivo
+        sql = "INSERT INTO usuarios (id_usuario, nombre, email, contrasena, telefono, rol) VALUES (%s, %s, %s,%s, %s, %s)"
+        valores = (nuevo_id, datos['nombre'], datos['email'], datos['contrasena'], datos['telefono'], datos['rol'])
+
+        cursor.execute(sql, valores)
+        conexion.connection.commit()
+
+        return jsonify({
+            'mensaje': 'Usuario registrado correctamente',
+            'id': nuevo_id,
+            'exito': True
+        })
+
+    except Exception as ex:
+        print(ex)
+        return jsonify({'mensaje': 'error al registrar usuario', 'exito': False})
+
+# ---------------------------
+# Listar usuarios
+# ---------------------------
+@app.route('/usuarios', methods=['GET'])
+def listar_usuarios():
+    try:
+        cursor = conexion.connection.cursor()
+        cursor.execute("SELECT * FROM usuarios")
+        usuarios = cursor.fetchall()  # lista de tuplas
+
+        lista = []
+        for u in usuarios:
+            lista.append({'id_usuario': u[0], 'nombre': u[1]})
+
+        return jsonify(lista)
+    except Exception as ex:
+        print(ex)
+        return jsonify({'mensaje': 'error', 'exito': False})
+
+# ---------------------------
+# Eliminar usuario por ID
+# ---------------------------
+@app.route('/eliminar/<int:id_usuario>', methods=['DELETE'])
+def eliminar_usuario(id_usuario):
+    try:
+        cursor = conexion.connection.cursor()
+        cursor.execute("DELETE FROM usuarios WHERE id_usuario = %s", (id_usuario,))
+        conexion.connection.commit()
+
+        if cursor.rowcount > 0:
+            return jsonify({'mensaje': 'Usuario eliminado', 'exito': True})
+        else:
+            return jsonify({'mensaje': 'Usuario no encontrado', 'exito': False})
+    except Exception as ex:
+        print(ex)
+        return jsonify({'mensaje': 'error', 'exito': False})
 
 
 def pagina_no_encontrada(error):
